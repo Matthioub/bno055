@@ -71,7 +71,7 @@ void setup() {
 
   //prueba
   mensaje->setValue("Funciona");
-  mensaje->norify();
+  mensaje->notify();
   Serial.println("Notificado");
 }
 
