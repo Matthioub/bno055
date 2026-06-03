@@ -1,18 +1,22 @@
-#include <Wire.h>
+#include <Wire.h>  //comunicación I2C
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
 #include <math.h>
 
-Adafruit_BNO055 bno(55, 0x29);
+Adafruit_BNO055 bno(55, 0x29);  //creación del objeto. 55 = id interno ; 0x29 = dirección del I2C
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("\nInicio");
 
-  Wire.begin(6, 7);
+  Wire.begin(6, 7);  //pines
 
   if (!bno.begin()) {
-    Serial.println("No se encontro el BNO055");
-    while (1);
+    Serial.println("No se encontró el BNO055");
+    while (!bno.begin()) {
+      Serial.println(".");
+      delay(1000);
+    }
   }
 
   delay(1000);
@@ -30,9 +34,9 @@ void loop() {
 
   // ===== ORIENTACIÓN FUSIONADA =====
   imu::Vector<3> euler =
-      bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+    bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 
-  float heading = euler.x();  // yaw = rumbo respecto al norte
+  int heading = round(euler.x());  //"round()" redondea los decimales
 
   if (heading < 0) {
     heading += 360;
@@ -44,10 +48,14 @@ void loop() {
   Serial.println("°");
 
   Serial.println("===== CALIBRACION =====");
-  Serial.print("SYS: "); Serial.print(sys);
-  Serial.print(" GYRO: "); Serial.print(gyro);
-  Serial.print(" ACCEL: "); Serial.print(accel);
-  Serial.print(" MAG: "); Serial.println(mag);
+  Serial.print("SYS: ");
+  Serial.print(sys);
+  Serial.print(" GYRO: ");
+  Serial.print(gyro);
+  Serial.print(" ACCEL: ");
+  Serial.print(accel);
+  Serial.print(" MAG: ");
+  Serial.println(mag);
 
   Serial.println();
 
