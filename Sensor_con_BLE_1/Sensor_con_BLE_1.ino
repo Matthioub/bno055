@@ -59,8 +59,7 @@ void setup() {
     while (!bno.begin()) {
       segundos = 0;
       Serial.println(".");
-      while (milisegundos < 1000)
-        ;
+      while (segundos < 1){}
     }
   }
   bno.setExtCrystalUse(true);
