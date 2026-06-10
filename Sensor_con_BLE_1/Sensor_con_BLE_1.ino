@@ -42,7 +42,7 @@ void setup() {
   anuncio->start();                                             //inicia el anuncio
 
   //bno
-  Wire.begin(6, 7);  //pines
+  Wire.begin(21, 20);  // SDA, SCL
 
 
 
@@ -59,7 +59,7 @@ void setup() {
     while (!bno.begin()) {
       segundos = 0;
       Serial.println(".");
-      while (segundos < 1){}
+      while (segundos < 1) {}
     }
   }
   bno.setExtCrystalUse(true);
@@ -75,42 +75,44 @@ void setup() {
 }
 
 void loop() {
-  controlarTimer();
 
-  //calibración
-  uint8_t sys, gyro, accel, mag;
-  bno.getCalibration(&sys, &gyro, &accel, &mag);
+  // Orientación
+  imu::Vector<3> euler =
+    bno.getVector(Adafruit_BNO055::VECTOR_EULER);
 
-  //orientación
-  imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
-
-  int heading = round(euler.x());  //"round()" redondea los decimales
+  int heading = round(euler.x());
 
   if (heading < 0) {
     heading += 360;
   }
 
+  // Magnetómetro
+  imu::Vector<3> mag =
+    bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
 
-  //código
+  // Enviar cada segundo
   if (segundos >= 1) {
-    segundos = 0;
-    char angle[50];
-    sprintf(angle, "Respecto al norte: %d grados", heading);
 
-    mensaje->setValue(angle);
+    segundos = 0;
+
+    char mensajeBLE[150];
+
+    sprintf(
+      mensajeBLE,
+      "N:%d X:%.2f Y:%.2f Z:%.2f",
+      heading,
+      mag.x(),
+      mag.y(),
+      mag.z()
+    );
+
+    mensaje->setValue(mensajeBLE);
     mensaje->notify();
 
-    Serial.println(angle);
+    Serial.println(mensajeBLE);
   }
 }
 
 void ARDUINO_ISR_ATTR onTimer() {
-  milisegundos++;
-}
-
-void controlarTimer() {
-  if (milisegundos >= 1000) {
-    segundos++;
-    milisegundos -= 1000;
-  }
+  segundos++;
 }
