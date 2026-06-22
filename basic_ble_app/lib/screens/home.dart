@@ -2,6 +2,7 @@ import 'dart:async'; //herramientas relacionadas con el tiempo
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+// import 'package:permission_handler/permission_handler.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,7 +20,26 @@ class _HomeScreenState extends State<HomeScreen> {
   //una variable que va guardar los scanResult
   //puede ser nulo (?) y son un dato "contínuo" (stream)
 
+  // Future<bool> pedirPermisosBluetooth() async {
+  //   //pide permiso
+  //   final scan = await Permission.bluetoothScan.request();
+  //   final connect = await Permission.bluetoothConnect.request();
+
+  //   if (scan.isGranted && connect.isGranted) {
+  //     return true;
+  //   }
+
+  //   estado = "Faltan permisos de Bluetooth";
+  //   setState(() {});
+  //   return false;
+  // }
+
   Future<void> iniciarEscaneo() async {
+    // final permisosOk = await pedirPermisosBluetooth();
+    // if (!permisosOk) {
+    //   return; //si no tiene el permiso no se ejecuta el resto
+    // }
+
     //Future<void> = void; async permite usar await
     await FlutterBluePlus.stopScan(); //termina cualquier escaneo previo
     await scanSubscription?.cancel(); //termina cualquier escucha previa
@@ -35,10 +55,9 @@ class _HomeScreenState extends State<HomeScreen> {
             .toString(); //resultado.device = dispositivo; remoteId es el identificador
         dispositivosEncontrados[id] = resultado;
         //agrega/actualiza el dispositivo al map
-
-        setState(() {});
       }
     });
+    setState(() {});
 
     estado = "Escaneando dispositivos BLE...";
     setState(() {});
