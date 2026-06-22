@@ -1,3 +1,5 @@
+import 'dart:async'; //herramientas relacionadas con el tiempo
+
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
@@ -11,8 +13,33 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   String estado = "Todavía no se escaneó";
 
+  final Map<String, ScanResult> dispositivosEncontrados =
+      {}; //crea un mapa (diccionario); la clave es el ID del dispositivo
+  StreamSubscription<List<ScanResult>>? scanSubscription;
+  //una variable que va guardar los scanResult
+  //puede ser nulo (?) y son un dato "contínuo" (stream)
+
   Future<void> iniciarEscaneo() async {
     //Future<void> = void; async permite usar await
+    await FlutterBluePlus.stopScan(); //termina cualquier escaneo previo
+    await scanSubscription?.cancel(); //termina cualquier escucha previa
+    dispositivosEncontrados.clear(); //borra dispositivos de escaneos anteriores
+
+    scanSubscription = FlutterBluePlus.onScanResults.listen((resultados) {
+      //listen se activa solo cuando hay algo
+
+      for (final resultado in resultados) {
+        //itera en los resultados obtenidos
+
+        final id = resultado.device.remoteId
+            .toString(); //resultado.device = dispositivo; remoteId es el identificador
+        dispositivosEncontrados[id] = resultado;
+        //agrega/actualiza el dispositivo al map
+
+        setState(() {});
+      }
+    });
+
     estado = "Escaneando dispositivos BLE...";
     setState(() {});
 
@@ -25,7 +52,7 @@ class _HomeScreenState extends State<HomeScreen> {
         .isScanning //isScanning puede devolver true o false
         .where(
           (escaneando) => escaneando == false,
-        ) //espera a que se escanee un falso
+        ) //espera a que se escanee un falsot
         .first; //toma el primer escaneo de falso
     estado = "Escaneo terminado";
     setState(() {});
@@ -33,6 +60,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final listaDispositivos = dispositivosEncontrados.values.toList();
+    //necesitamos una lista para el ListBuilder, solo agarra los valores (no keys)
+
+    listaDispositivos.sort(
+      //ordena a los dispositivos por señal
+      (a, b) => b.rssi.compareTo(a.rssi), //rssi = calidad de señal
+    );
+
     return Scaffold(
       appBar: AppBar(
         title: Center(
@@ -42,17 +77,58 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(estado, style: TextStyle(color: Colors.blueGrey)),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: iniciarEscaneo, //no hace falta usar (){}
-              child: const Text("Iniciar escaneo"),
-            ),
-          ],
+      body: Padding(
+        padding: const EdgeInsets.all(16), //16 píxeles de todas las esquinas
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(estado, style: TextStyle(color: Colors.blueGrey)),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: iniciarEscaneo, //no hace falta usar (){}
+                child: const Text("Iniciar escaneo"),
+              ),
+              const SizedBox(height: 20),
+
+              Text(
+                "Encontrados: ${dispositivosEncontrados.length}",
+                style: TextStyle(color: Colors.blueGrey, fontSize: 40),
+              ),
+
+              Expanded(
+                //"usá todo el espacio que haya"
+                child: ListView.builder(
+                  itemCount: listaDispositivos.length,
+                  itemBuilder: (context, index) {
+                    //iteracón
+
+                    final resultado = listaDispositivos[index];
+
+                    final nombre =
+                        resultado.advertisementData.advName.isNotEmpty
+                        ? resultado.advertisementData.advName
+                        : "Dispositivo sin nombre";
+                    //CONDICIONAL CORTO, busca si tiene nombre y lo usa
+
+                    final id = resultado.device.remoteId.toString();
+                    //obtiene el id
+
+                    final senal = resultado.rssi;
+
+                    return ListTile(
+                      //crea la lista visual
+                      leading: const Icon(Icons.bluetooth), //ícono
+                      title: Text(nombre), //nombre del disp
+                      subtitle: Text("ID: $id\nSeñal: $senal dBm"), //otros
+                      isThreeLine: true, //puede dar más de una línea de text
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
