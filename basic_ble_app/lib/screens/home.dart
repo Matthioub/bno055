@@ -20,6 +20,10 @@ class _HomeScreenState extends State<HomeScreen> {
   //una variable que va guardar los scanResult
   //puede ser nulo (?) y son un dato "contínuo" (stream)
 
+  BluetoothDevice? dispositivoConectado;
+  //variable que almacena el dispositivo conectado
+  //si no hay nada conectado vale null
+
   // Future<bool> pedirPermisosBluetooth() async {
   //   //pide permiso
   //   final scan = await Permission.bluetoothScan.request();
@@ -56,8 +60,8 @@ class _HomeScreenState extends State<HomeScreen> {
         dispositivosEncontrados[id] = resultado;
         //agrega/actualiza el dispositivo al map
       }
+      setState(() {});
     });
-    setState(() {});
 
     estado = "Escaneando dispositivos BLE...";
     setState(() {});
@@ -71,10 +75,41 @@ class _HomeScreenState extends State<HomeScreen> {
         .isScanning //isScanning puede devolver true o false
         .where(
           (escaneando) => escaneando == false,
-        ) //espera a que se escanee un falsot
+        ) //espera a que se escanee un falso
         .first; //toma el primer escaneo de falso
     estado = "Escaneo terminado";
     setState(() {});
+  }
+
+  Future<void> conectarDispositivo(ScanResult resultado) async {
+    //para conectarse a dispositivos
+
+    final dispositivo = resultado.device;
+    //elije el "device" dentro de todos los datos que tiene
+
+    estado = "Conectando...";
+    setState(() {});
+
+    try {
+      //try-catch
+      await FlutterBluePlus.stopScan(); //frenar el escaneo (jic)
+
+      await dispositivo.connect(
+        license: License.nonprofit, //proyecto escolar
+        timeout: const Duration(seconds: 15), //si no llega va al catch
+        autoConnect: false,
+      );
+
+      dispositivoConectado = dispositivo; //guardo en la variable global
+
+      estado = "Conectado a ${resultado.advertisementData.advName}"; //aviso
+      setState(() {});
+
+    } catch (error) {
+      //error es una variable
+      estado = "Error al conectar: $error";
+      setState(() {});
+    }
   }
 
   @override
@@ -99,54 +134,67 @@ class _HomeScreenState extends State<HomeScreen> {
       body: Padding(
         padding: const EdgeInsets.all(16), //16 píxeles de todas las esquinas
         child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Text(estado, style: TextStyle(color: Colors.blueGrey)),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: iniciarEscaneo, //no hace falta usar (){}
-                child: const Text("Iniciar escaneo"),
+          child: SizedBox(
+            width: 600,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    estado,
+                    style: TextStyle(color: Colors.blueGrey, fontSize: 30),
+                  ),
+                  const SizedBox(height: 20),
+                  ElevatedButton(
+                    onPressed: iniciarEscaneo, //no hace falta usar (){}
+                    child: const Text("Iniciar escaneo"),
+                  ),
+                  const SizedBox(height: 20),
+            
+                  Text(
+                    "Encontrados: ${dispositivosEncontrados.length}",
+                    style: TextStyle(color: Colors.blueGrey, fontSize: 40),
+                  ),
+            
+                  Expanded(
+                    //"usá todo el espacio que haya"
+                    child: ListView.builder(
+                      itemCount: listaDispositivos.length,
+                      itemBuilder: (context, index) {
+                        //iteracón
+            
+                        final resultado = listaDispositivos[index];
+            
+                        final nombre =
+                            resultado.advertisementData.advName.isNotEmpty
+                            ? resultado.advertisementData.advName
+                            : "Dispositivo sin nombre";
+                        //CONDICIONAL CORTO, busca si tiene nombre y lo usa
+            
+                        final id = resultado.device.remoteId.toString();
+                        //obtiene el id
+            
+                        final senal = resultado.rssi;
+            
+                        return Card( //hace que se vea junto
+                          child: ListTile(
+                            //crea la lista visual
+                            leading: const Icon(Icons.bluetooth), //ícono
+                            title: Text(nombre), //nombre del disp
+                            subtitle: Text("ID: $id\nSeñal: $senal dBm"), //otros
+                            isThreeLine: true, //puede dar más de una línea de text}
+                            trailing: ElevatedButton(onPressed: (){
+                              conectarDispositivo(resultado);
+                            }, child: const Text("Conectar")),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 20),
-
-              Text(
-                "Encontrados: ${dispositivosEncontrados.length}",
-                style: TextStyle(color: Colors.blueGrey, fontSize: 40),
-              ),
-
-              Expanded(
-                //"usá todo el espacio que haya"
-                child: ListView.builder(
-                  itemCount: listaDispositivos.length,
-                  itemBuilder: (context, index) {
-                    //iteracón
-
-                    final resultado = listaDispositivos[index];
-
-                    final nombre =
-                        resultado.advertisementData.advName.isNotEmpty
-                        ? resultado.advertisementData.advName
-                        : "Dispositivo sin nombre";
-                    //CONDICIONAL CORTO, busca si tiene nombre y lo usa
-
-                    final id = resultado.device.remoteId.toString();
-                    //obtiene el id
-
-                    final senal = resultado.rssi;
-
-                    return ListTile(
-                      //crea la lista visual
-                      leading: const Icon(Icons.bluetooth), //ícono
-                      title: Text(nombre), //nombre del disp
-                      subtitle: Text("ID: $id\nSeñal: $senal dBm"), //otros
-                      isThreeLine: true, //puede dar más de una línea de text
-                    );
-                  },
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),
