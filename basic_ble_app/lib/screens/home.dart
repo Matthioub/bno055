@@ -24,6 +24,13 @@ class _HomeScreenState extends State<HomeScreen> {
   //variable que almacena el dispositivo conectado
   //si no hay nada conectado vale null
 
+  BluetoothCharacteristic? caracteristicaDatos;
+  //Característica
+
+  final Guid serviceUuid = Guid("12345678-1234-1234-1234-123456789abc");
+  final Guid characteristicUuid = Guid("abcd1234-1234-1234-1234-abcdef123456");
+  //UUID BLE (por eso "Guid") del servicio y de la característica
+
   // Future<bool> pedirPermisosBluetooth() async {
   //   //pide permiso
   //   final scan = await Permission.bluetoothScan.request();
@@ -103,13 +110,41 @@ class _HomeScreenState extends State<HomeScreen> {
       dispositivoConectado = dispositivo; //guardo en la variable global
 
       estado = "Conectado a ${resultado.advertisementData.advName}"; //aviso
-      setState(() {});
 
+      await descubrirServicios(dispositivo); //busca e imprime los servicios
+      setState(() {});
     } catch (error) {
       //error es una variable
       estado = "Error al conectar: $error";
       setState(() {});
     }
+  }
+
+  Future<void> descubrirServicios(BluetoothDevice dispositivo) async {
+    estado = "Buscando servicios...";
+    setState(() {});
+
+    final servicios = await dispositivo.discoverServices();
+
+    for (final servicio in servicios) {
+      if (servicio.uuid != serviceUuid) {
+        continue;
+        //saltea al siguiente servicio
+      }
+      for (final caracteristica in servicio.characteristics) {
+        if (caracteristica.uuid == characteristicUuid) {
+          caracteristicaDatos = caracteristica;
+
+          estado = "Característica de datos encontrada";
+          setState(() {});
+
+          debugPrint("Característica correcta encontrada");
+          debugPrint("READ: ${caracteristica.properties.read}");
+          debugPrint("NOTIFY: ${caracteristica.properties.notify}");
+        }
+      }
+    }
+    setState(() {});
   }
 
   @override
@@ -151,42 +186,49 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: const Text("Iniciar escaneo"),
                   ),
                   const SizedBox(height: 20),
-            
+
                   Text(
                     "Encontrados: ${dispositivosEncontrados.length}",
                     style: TextStyle(color: Colors.blueGrey, fontSize: 40),
                   ),
-            
+
                   Expanded(
                     //"usá todo el espacio que haya"
                     child: ListView.builder(
                       itemCount: listaDispositivos.length,
                       itemBuilder: (context, index) {
                         //iteracón
-            
+
                         final resultado = listaDispositivos[index];
-            
+
                         final nombre =
                             resultado.advertisementData.advName.isNotEmpty
                             ? resultado.advertisementData.advName
                             : "Dispositivo sin nombre";
                         //CONDICIONAL CORTO, busca si tiene nombre y lo usa
-            
+
                         final id = resultado.device.remoteId.toString();
                         //obtiene el id
-            
+
                         final senal = resultado.rssi;
-            
-                        return Card( //hace que se vea junto
+
+                        return Card(
+                          //hace que se vea junto
                           child: ListTile(
                             //crea la lista visual
                             leading: const Icon(Icons.bluetooth), //ícono
                             title: Text(nombre), //nombre del disp
-                            subtitle: Text("ID: $id\nSeñal: $senal dBm"), //otros
-                            isThreeLine: true, //puede dar más de una línea de text}
-                            trailing: ElevatedButton(onPressed: (){
-                              conectarDispositivo(resultado);
-                            }, child: const Text("Conectar")),
+                            subtitle: Text(
+                              "ID: $id\nSeñal: $senal dBm",
+                            ), //otros
+                            isThreeLine:
+                                true, //puede dar más de una línea de text}
+                            trailing: ElevatedButton(
+                              onPressed: () {
+                                conectarDispositivo(resultado);
+                              },
+                              child: const Text("Conectar"),
+                            ),
                           ),
                         );
                       },
