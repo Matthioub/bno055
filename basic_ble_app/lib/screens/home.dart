@@ -1,4 +1,5 @@
 import 'dart:async'; //herramientas relacionadas con el tiempo
+import 'dart:convert'; //permite usar funciones para convertis bytes a Str
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -26,6 +27,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   BluetoothCharacteristic? caracteristicaDatos;
   //Característica
+
+  StreamSubscription<List<int>>? datosSubscription;
+  //recible los bytes
+
+  String ultimoMensaje = "";
+  //va a recibir el mensaje decodificado
 
   final Guid serviceUuid = Guid("12345678-1234-1234-1234-123456789abc");
   final Guid characteristicUuid = Guid("abcd1234-1234-1234-1234-abcdef123456");
@@ -141,9 +148,39 @@ class _HomeScreenState extends State<HomeScreen> {
           debugPrint("Característica correcta encontrada");
           debugPrint("READ: ${caracteristica.properties.read}");
           debugPrint("NOTIFY: ${caracteristica.properties.notify}");
+
+          await activarNotificaciones();
         }
       }
     }
+    setState(() {});
+  }
+
+  Future<void> activarNotificaciones() async {
+    if (caracteristicaDatos == null) {
+      estado = "No hay característica de datos";
+      setState(() {});
+      return;
+    }
+
+    await datosSubscription?.cancel(); //cancela escuchas previa
+
+    datosSubscription = caracteristicaDatos!.onValueReceived.listen(
+      //debajo todo se ejecuta cuando llega un dato nuevo
+      (datoNuevo) {
+        final texto = utf8.decode(datoNuevo, allowMalformed: true);
+        // convienrte en texto lo recibido
+
+        ultimoMensaje = texto;
+        estado = "Dato recibido";
+        setState(() {});
+      },
+    );
+
+    await caracteristicaDatos!.setNotifyValue(true);
+    //activa las notificaciones
+
+    estado = "Notificaciones activadas";
     setState(() {});
   }
 
@@ -176,9 +213,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Text(
-                    estado,
-                    style: TextStyle(color: Colors.blueGrey, fontSize: 30),
+                  Row(
+                    children: [
+                      Text(
+                        estado,
+                        style: TextStyle(color: Colors.blueGrey, fontSize: 30),
+                      ),
+                      SizedBox(width: 20),
+                      Text(
+                        "Orientación: $ultimoMensaje",
+                        style: TextStyle(color: Colors.blueGrey, fontSize: 20),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 20),
                   ElevatedButton(
