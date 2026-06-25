@@ -8,10 +8,11 @@ Adafruit_BNO055 bno(55, 0x29);  //creación del objeto. 55 = id interno ; 0x29 =
 
 NimBLECharacteristic* mensaje;  //mensaje es una variable
 
-hw_timer_t* timer = NULL;
+#define TIEMPO_ESPERA_DATOS 50    //50ms; 20 datos por segundo
+#define TIEMPO_ESPERA_SETUP 1000  //1s
 
-volatile int milisegundos = 0;
-volatile int segundos = 0;
+unsigned long tiempoAnteriorDatos = 0;
+unsigned long tiempoAnteriorSetUp = 0;
 
 void setup() {
   //begin
@@ -44,22 +45,15 @@ void setup() {
   //bno
   Wire.begin(21, 20);  // SDA, SCL
 
-
-
-  //timer
-  timer = timerBegin(1000);
-  timerAttachInterrupt(timer, &onTimer);
-  timerAlarm(timer, 1000, true, 0);  //1ms
-
   Serial.println("BLE iniciado.");
 
   //bno
   if (!bno.begin()) {
     Serial.println("No se encontró el BNO055");
     while (!bno.begin()) {
-      segundos = 0;
+      tiempoAnteriorSetUp = millis();
       Serial.println(".");
-      while (segundos < 1) {}
+      while (millis() - tiempoAnteriorSetUp < TIEMPO_ESPERA_SETUP) {}
     }
   }
   bno.setExtCrystalUse(true);
@@ -91,9 +85,9 @@ void loop() {
     bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
 
   // Enviar cada segundo
-  if (segundos >= 1) {
+  if (millis() - tiempoAnteriorDatos >= TIEMPO_ESPERA_DATOS) {
 
-    segundos = 0;
+    tiempoAnteriorDatos = millis();
 
     char mensajeBLE[150];
 
@@ -103,16 +97,11 @@ void loop() {
       heading,
       mag.x(),
       mag.y(),
-      mag.z()
-    );
+      mag.z());
 
     mensaje->setValue(mensajeBLE);
     mensaje->notify();
 
     Serial.println(mensajeBLE);
   }
-}
-
-void ARDUINO_ISR_ATTR onTimer() {
-  segundos++;
 }
