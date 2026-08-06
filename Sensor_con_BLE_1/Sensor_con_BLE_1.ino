@@ -6,13 +6,51 @@
 
 Adafruit_BNO055 bno(55, 0x29);  //creación del objeto. 55 = id interno ; 0x29 = dirección del I2C
 
-NimBLECharacteristic* mensaje;  //mensaje es una variable
+NimBLEServer* servidor = nullptr;
+NimBLECharacteristic* mensaje = nullptr;
+
+volatile bool telefonoConectado = false;
+volatile bool notificacionesHabilitadas = false;
 
 #define TIEMPO_ESPERA_DATOS 50    //50ms; 20 datos por segundo
 #define TIEMPO_ESPERA_SETUP 1000  //1s
 
 unsigned long tiempoAnteriorDatos = 0;
 unsigned long tiempoAnteriorSetUp = 0;
+
+class EventosServidor : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer* servidor, NimBLEConnInfo& informacionConexion) override {
+    telefonoConectado = true;
+    Serial.printf(
+      "Teléfono conectado: %s\n",
+      informacionConexion.getAddress().toString().c_str());
+  }
+
+  void onDisconnect(
+    NimBLEServer* servidor,
+    NimBLEConnInfo& informacionConexion,
+    int motivo) override {
+    telefonoConectado = false;
+    notificacionesHabilitadas = false;
+    Serial.printf("Teléfono desconectado. Motivo: %d\n", motivo);
+  }
+};
+
+class EventosMensaje : public NimBLECharacteristicCallbacks {
+  void onSubscribe(
+    NimBLECharacteristic* caracteristica,
+    NimBLEConnInfo& informacionConexion,
+    uint16_t valorSuscripcion) override {
+    notificacionesHabilitadas = (valorSuscripcion & 0x01) != 0;
+    Serial.println(
+      notificacionesHabilitadas
+        ? "Notificaciones habilitadas."
+        : "Notificaciones deshabilitadas.");
+  }
+};
+
+EventosServidor eventosServidor;
+EventosMensaje eventosMensaje;
 
 void setup() {
   //begin
@@ -25,7 +63,9 @@ void setup() {
   //BLE
   NimBLEDevice::init("ESP32C3_Santino");  //inicializa el dispositivo y su nombre
 
-  NimBLEServer* /* "dirección" */ servidor = NimBLEDevice::createServer();  //crea el servidor para conectarse
+  servidor = NimBLEDevice::createServer();  //crea el servidor para conectarse
+  servidor->setCallbacks(&eventosServidor);
+  servidor->advertiseOnDisconnect(true);
 
   NimBLEService* servicio = servidor->createService("12345678-1234-1234-1234-123456789abc");  //servicio es como una carpeta | el string es el UUID ("identificador")
 
@@ -34,6 +74,7 @@ void setup() {
   mensaje = servicio->createCharacteristic(            //característica dentro de "servicio"
     "abcd1234-1234-1234-1234-abcdef123456",            //UUID
     NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);  //es del tipo "lectura y notificación"
+  mensaje->setCallbacks(&eventosMensaje);
 
   servicio->start();
 
@@ -59,13 +100,6 @@ void setup() {
   bno.setExtCrystalUse(true);
 
   Serial.println("Bno iniciado");
-
-
-
-  //prueba
-  mensaje->setValue("Funciona");
-  mensaje->notify();
-  Serial.println("Notificado");
 }
 
 void loop() {
@@ -85,7 +119,9 @@ void loop() {
     bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
 
   // Enviar cada segundo
-  if (millis() - tiempoAnteriorDatos >= TIEMPO_ESPERA_DATOS) {
+  if (telefonoConectado &&
+      notificacionesHabilitadas &&
+      millis() - tiempoAnteriorDatos >= TIEMPO_ESPERA_DATOS) {
 
     tiempoAnteriorDatos = millis();
 
