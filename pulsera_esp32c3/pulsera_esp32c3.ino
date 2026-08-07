@@ -33,8 +33,8 @@
 #define PIN_SCL 20
 
 // ---- WiFi ----
-#define WIFI_SSID "TU_RED"
-#define WIFI_PASSWORD "TU_CLAVE"
+#define WIFI_SSID "Tinoo"
+#define WIFI_PASSWORD "fldsmdfr"
 #define PUERTO_UDP 4210
 #define TIMEOUT_WIFI_MS 15000
 
