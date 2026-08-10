@@ -42,6 +42,7 @@
 #define BLE_NOMBRE "ESP32C3_Santino"
 #define BLE_UUID_SERVICIO "12345678-1234-1234-1234-123456789abc"
 #define BLE_UUID_CARACTERISTICA "abcd1234-1234-1234-1234-abcdef123456"
+#define BLE_UUID_CARACTERISTICA_SEMAFORO "abcd1234-1234-1234-1234-abcdef123457"
 
 // ---- Tiempos generales ----
 #define TIEMPO_ESPERA_SETUP 1000  // reintento de sensores no encontrados
@@ -72,6 +73,7 @@ Adafruit_BNO055 bno(55, 0x29);  // 55 = id interno ; 0x29 = dirección I2C
 // ---- BLE ----
 NimBLEServer* servidor = nullptr;
 NimBLECharacteristic* caracteristicaMensaje = nullptr;
+NimBLECharacteristic* caracteristicaSemaforo = nullptr;
 volatile bool telefonoConectado = false;
 volatile bool notificacionesHabilitadas = false;
 unsigned long ultimoEnvioBLE = 0;
@@ -84,6 +86,9 @@ enum EstadoSemaforo { SIN_SEMAFORO,
                       ROJO,
                       AMARILLO,
                       VERDE };
+
+bool interpretarComando(const char* comando, EstadoSemaforo& resultado);
+void vibracionSetEstado(EstadoSemaforo nuevoEstado);
 
 struct PatronVibracion {
   unsigned int bpm;
@@ -169,8 +174,25 @@ class EventosMensaje : public NimBLECharacteristicCallbacks {
   }
 };
 
+class EventosSemaforo : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* caracteristica, NimBLEConnInfo& informacionConexion) override {
+    std::string comando = caracteristica->getValue();
+    EstadoSemaforo nuevoEstado;
+
+    Serial.print("Comando BLE recibido: ");
+    Serial.println(comando.c_str());
+
+    if (interpretarComando(comando.c_str(), nuevoEstado)) {
+      vibracionSetEstado(nuevoEstado);
+    } else {
+      Serial.println("Comando BLE no reconocido.");
+    }
+  }
+};
+
 EventosServidor eventosServidor;
 EventosMensaje eventosMensaje;
+EventosSemaforo eventosSemaforo;
 
 void bleSetup() {
   NimBLEDevice::init(BLE_NOMBRE);
@@ -185,6 +207,11 @@ void bleSetup() {
     BLE_UUID_CARACTERISTICA,
     NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   caracteristicaMensaje->setCallbacks(&eventosMensaje);
+
+  caracteristicaSemaforo = servicio->createCharacteristic(
+    BLE_UUID_CARACTERISTICA_SEMAFORO,
+    NIMBLE_PROPERTY::WRITE);
+  caracteristicaSemaforo->setCallbacks(&eventosSemaforo);
 
   servicio->start();
 
