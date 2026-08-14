@@ -348,7 +348,7 @@ bool interpretarComando(const char* comando, EstadoSemaforo& resultado) {
     resultado = SIN_SEMAFORO;
     return true;
   }
-  if (strcmp(comando, "SIN_SENAL") == 0) {
+  if (strcmp(comando, "SIN_SEÑAL") == 0) {
     resultado = SIN_SENAL;
     return true;
   }
