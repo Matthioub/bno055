@@ -2,7 +2,7 @@
   Pulsera háptica ESP32-C3 — todo en un archivo, modularizado por funciones
   ---------------------------------------------------------------------------
   - Lee orientación/magnetómetro del BNO055 y lo manda por BLE al teléfono.
-  - Recibe por WiFi (UDP) el estado del semáforo peatonal.
+  - Recibe por BLE el estado del semáforo que la app obtiene de Firebase.
   - Traduce ese estado en un patrón de vibración en el DRV2605L.
 
   Estructura del archivo:
@@ -11,8 +11,7 @@
     3) Funciones del sensor (BNO055)
     4) Funciones de BLE
     5) Funciones de vibración (DRV2605L)
-    6) Funciones de WiFi
-    7) setup() / loop()
+    6) setup() / loop()
 */
 
 #include <Wire.h>
@@ -20,8 +19,6 @@
 #include <Adafruit_BNO055.h>
 #include <Adafruit_DRV2605.h>
 #include <NimBLEDevice.h>
-#include <WiFi.h>
-#include <WiFiUdp.h>
 #include <math.h>
 
 // =============================================================
@@ -31,12 +28,6 @@
 // ---- Pines I2C (bus compartido: BNO055 + DRV2605L) ----
 #define PIN_SDA 21
 #define PIN_SCL 20
-
-// ---- WiFi ----
-#define WIFI_SSID "Tinoo"
-#define WIFI_PASSWORD "fldsmdfr"
-#define PUERTO_UDP 4210
-#define TIMEOUT_WIFI_MS 15000
 
 // ---- BLE ----
 #define BLE_NOMBRE "ESP32C3_Santino"
@@ -99,7 +90,7 @@ struct PatronVibracion {
 };
 
 // Un patrón por cada EstadoSemaforo, en el mismo orden del enum.
-PatronVibracion patrones[5] = {
+const PatronVibracion patrones[5] = {
   /* SIN_SEMAFORO */ { 65, PULSO_CORTO, false, 0, INTENSIDAD_2 },
   /* SIN_SENAL    */ { 65, PULSO_CORTO, true, GAP_DOBLE_REPETIDO, INTENSIDAD_3 },
   /* ROJO         */ { 60, PULSO_LARGO, false, 0, INTENSIDAD_5 },
@@ -115,10 +106,6 @@ FaseVibracion fase = ESPERANDO_BEAT;
 EstadoSemaforo estadoActual = SIN_SEMAFORO;
 unsigned long tiempoInicioBeat = 0;
 unsigned long tiempoInicioFase = 0;
-
-// ---- WiFi ----
-WiFiUDP udp;
-char paqueteEntrante[64];
 
 // =============================================================
 // 3) SENSOR (BNO055)
@@ -244,6 +231,22 @@ void drvApagar() {
   drv.setRealtimeValue(0);
 }
 
+const char* nombreEstadoSemaforo(EstadoSemaforo estado) {
+  switch (estado) {
+    case SIN_SEMAFORO:
+      return "SIN_SEMAFORO";
+    case SIN_SENAL:
+      return "SIN_SENAL";
+    case ROJO:
+      return "ROJO";
+    case AMARILLO:
+      return "AMARILLO";
+    case VERDE:
+      return "VERDE";
+  }
+  return "DESCONOCIDO";
+}
+
 void vibracionSetup() {
   if (!drv.begin()) {
     Serial.println("No se encontró el DRV2605L");
@@ -265,14 +268,19 @@ void vibracionSetup() {
 }
 
 void vibracionSetEstado(EstadoSemaforo nuevoEstado) {
-  if (nuevoEstado == estadoActual) return;
-
   estadoActual = nuevoEstado;
-  // Reinicia el ciclo para que el cambio de patrón se sienta enseguida,
-  // en vez de esperar a que termine el beat anterior.
+
+  // Cada comando aceptado reinicia el patrón y produce el primer pulso
+  // inmediatamente. Los siguientes pulsos continúan sin bloquear loop().
   drvApagar();
-  fase = ESPERANDO_BEAT;
   tiempoInicioBeat = millis();
+  tiempoInicioFase = tiempoInicioBeat;
+  drvEncender(patrones[estadoActual].intensidad);
+  fase = PULSO_1;
+
+  Serial.printf(
+    "Patrón de vibración iniciado: %s\n",
+    nombreEstadoSemaforo(estadoActual));
 }
 
 void vibracionActualizar() {
@@ -315,32 +323,6 @@ void vibracionActualizar() {
   }
 }
 
-// =============================================================
-// 6) WIFI
-// =============================================================
-
-void wifiSetup() {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  Serial.print("Conectando a WiFi");
-  unsigned long inicio = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - inicio < TIMEOUT_WIFI_MS) {
-    delay(250);
-    Serial.print(".");
-  }
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("WiFi conectado. IP: ");
-    Serial.println(WiFi.localIP());
-    udp.begin(PUERTO_UDP);
-    Serial.printf("Escuchando UDP en puerto %u\n", PUERTO_UDP);
-  } else {
-    Serial.println("No se pudo conectar al WiFi (se continúa sin él).");
-  }
-}
-
 // Traduce el texto recibido (ej: "ROJO") al EstadoSemaforo correspondiente.
 // Devuelve false si el comando no se reconoce.
 bool interpretarComando(const char* comando, EstadoSemaforo& resultado) {
@@ -348,7 +330,7 @@ bool interpretarComando(const char* comando, EstadoSemaforo& resultado) {
     resultado = SIN_SEMAFORO;
     return true;
   }
-  if (strcmp(comando, "SIN_SEÑAL") == 0) {
+  if (strcmp(comando, "SIN_SENAL") == 0) {
     resultado = SIN_SENAL;
     return true;
   }
@@ -367,26 +349,8 @@ bool interpretarComando(const char* comando, EstadoSemaforo& resultado) {
   return false;
 }
 
-void wifiActualizar() {
-  int tamanioPaquete = udp.parsePacket();
-  if (tamanioPaquete <= 0) return;
-
-  int leidos = udp.read(paqueteEntrante, sizeof(paqueteEntrante) - 1);
-  paqueteEntrante[leidos] = '\0';
-
-  Serial.print("UDP recibido: ");
-  Serial.println(paqueteEntrante);
-
-  EstadoSemaforo nuevoEstado;
-  if (interpretarComando(paqueteEntrante, nuevoEstado)) {
-    vibracionSetEstado(nuevoEstado);
-  } else {
-    Serial.println("Comando UDP no reconocido.");
-  }
-}
-
 // =============================================================
-// 7) SETUP / LOOP
+// 6) SETUP / LOOP
 // =============================================================
 
 void setup() {
@@ -399,13 +363,11 @@ void setup() {
   sensorSetup();
   vibracionSetup();
   bleSetup();
-  wifiSetup();
 
   Serial.println("Listo.");
 }
 
 void loop() {
-  wifiActualizar();       // ¿llegó un nuevo estado de semáforo por WiFi?
   vibracionActualizar();  // avanza la máquina de estados de la vibración
 
   if (bleHayConexion() && millis() - ultimoEnvioBLE >= INTERVALO_ENVIO_BLE) {
