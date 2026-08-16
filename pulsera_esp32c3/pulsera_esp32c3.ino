@@ -45,15 +45,6 @@
 #define INTENSIDAD_4 102  // 4/5
 #define INTENSIDAD_5 127  // 5/5
 
-// ---- Vibración: duración de cada pulso (ms) ----
-#define PULSO_CORTO 90
-#define PULSO_MEDIANO 180
-#define PULSO_LARGO 350
-
-// ---- Vibración: separación entre los 2 toques de un patrón doble (ms) ----
-#define GAP_DOBLE_RAPIDO 60     // Amarillo: toques pegados
-#define GAP_DOBLE_REPETIDO 130  // Sin señal: toques más separados
-
 // =============================================================
 // 2) OBJETOS Y VARIABLES GLOBALES
 // =============================================================
@@ -76,36 +67,78 @@ enum EstadoSemaforo { SIN_SEMAFORO,
                       SIN_SENAL,
                       ROJO,
                       AMARILLO,
-                      VERDE };
+                      VERDE,
+                      CAMINANDO };
 
 bool interpretarComando(const char* comando, EstadoSemaforo& resultado);
 void vibracionSetEstado(EstadoSemaforo nuevoEstado);
 
-struct PatronVibracion {
-  unsigned int bpm;
-  unsigned long duracionPulso;
-  bool esDoble;
-  unsigned long gapDoble;
+struct PasoVibracion {
+  unsigned long duracionMs;
   uint8_t intensidad;
 };
 
-// Un patrón por cada EstadoSemaforo, en el mismo orden del enum.
-const PatronVibracion patrones[5] = {
-  /* SIN_SEMAFORO */ { 65, PULSO_CORTO, false, 0, INTENSIDAD_2 },
-  /* SIN_SENAL    */ { 65, PULSO_CORTO, true, GAP_DOBLE_REPETIDO, INTENSIDAD_3 },
-  /* ROJO         */ { 60, PULSO_LARGO, false, 0, INTENSIDAD_5 },
-  /* AMARILLO     */ { 40, PULSO_CORTO, true, GAP_DOBLE_RAPIDO, INTENSIDAD_4 },
-  /* VERDE        */ { 40, PULSO_MEDIANO, false, 0, INTENSIDAD_3 }
+struct PatronVibracion {
+  const PasoVibracion* pasos;
+  uint8_t cantidadPasos;
+  unsigned long pausaEntrePatronesMs;
 };
 
-enum FaseVibracion { ESPERANDO_BEAT,
-                     PULSO_1,
-                     GAP,
-                     PULSO_2 };
-FaseVibracion fase = ESPERANDO_BEAT;
+// Cada lista alterna vibración y silencio. Una intensidad de 0 representa
+// silencio. Las formas son diferentes incluso si la intensidad se percibe mal.
+const PasoVibracion pasosSinSemaforo[] = {
+  { 100, INTENSIDAD_2 },
+  { 250, 0 },
+  { 100, INTENSIDAD_2 },
+};
+
+const PasoVibracion pasosSinSenal[] = {
+  { 160, INTENSIDAD_5 },
+  { 100, 0 },
+  { 160, INTENSIDAD_5 },
+  { 100, 0 },
+  { 160, INTENSIDAD_5 },
+  { 100, 0 },
+  { 160, INTENSIDAD_5 },
+};
+
+const PasoVibracion pasosRojo[] = {
+  { 600, INTENSIDAD_5 },
+};
+
+const PasoVibracion pasosAmarillo[] = {
+  { 100, INTENSIDAD_4 },
+  { 120, 0 },
+  { 100, INTENSIDAD_4 },
+  { 120, 0 },
+  { 100, INTENSIDAD_4 },
+};
+
+const PasoVibracion pasosVerde[] = {
+  { 100, INTENSIDAD_3 },
+  { 160, 0 },
+  { 400, INTENSIDAD_3 },
+};
+
+const PasoVibracion pasosCaminando[] = {
+  { 70, INTENSIDAD_2 },
+};
+
+// La pausa comienza después del último paso. Por ejemplo, el patrón de
+// CAMINANDO dura 70 ms y descansa 7930 ms: un toque cada 8 segundos.
+const PatronVibracion patrones[] = {
+  /* SIN_SEMAFORO */ { pasosSinSemaforo, 3, 3550 },
+  /* SIN_SENAL    */ { pasosSinSenal, 7, 2060 },
+  /* ROJO         */ { pasosRojo, 1, 1400 },
+  /* AMARILLO     */ { pasosAmarillo, 5, 1460 },
+  /* VERDE        */ { pasosVerde, 3, 1340 },
+  /* CAMINANDO    */ { pasosCaminando, 1, 7930 },
+};
+
 EstadoSemaforo estadoActual = SIN_SEMAFORO;
-unsigned long tiempoInicioBeat = 0;
-unsigned long tiempoInicioFase = 0;
+uint8_t indicePasoActual = 0;
+bool esperandoSiguientePatron = false;
+unsigned long tiempoInicioPaso = 0;
 
 // =============================================================
 // 3) SENSOR (BNO055)
@@ -243,8 +276,16 @@ const char* nombreEstadoSemaforo(EstadoSemaforo estado) {
       return "AMARILLO";
     case VERDE:
       return "VERDE";
+    case CAMINANDO:
+      return "CAMINANDO";
   }
   return "DESCONOCIDO";
+}
+
+void vibracionIniciarPasoActual() {
+  const PatronVibracion& patron = patrones[estadoActual];
+  drvEncender(patron.pasos[indicePasoActual].intensidad);
+  tiempoInicioPaso = millis();
 }
 
 void vibracionSetup() {
@@ -261,8 +302,9 @@ void vibracionSetup() {
   drv.setMode(DRV2605_MODE_REALTIME);  // control directo de amplitud por I2C
   drv.setRealtimeValue(0);
 
-  tiempoInicioBeat = millis();
-  fase = ESPERANDO_BEAT;
+  indicePasoActual = 0;
+  esperandoSiguientePatron = false;
+  tiempoInicioPaso = millis();
 
   Serial.println("DRV2605L iniciado.");
 }
@@ -270,13 +312,12 @@ void vibracionSetup() {
 void vibracionSetEstado(EstadoSemaforo nuevoEstado) {
   estadoActual = nuevoEstado;
 
-  // Cada comando aceptado reinicia el patrón y produce el primer pulso
-  // inmediatamente. Los siguientes pulsos continúan sin bloquear loop().
+  // Cada comando aceptado reinicia el patrón y produce el primer paso
+  // inmediatamente. Los siguientes pasos continúan sin bloquear loop().
   drvApagar();
-  tiempoInicioBeat = millis();
-  tiempoInicioFase = tiempoInicioBeat;
-  drvEncender(patrones[estadoActual].intensidad);
-  fase = PULSO_1;
+  indicePasoActual = 0;
+  esperandoSiguientePatron = false;
+  vibracionIniciarPasoActual();
 
   Serial.printf(
     "Patrón de vibración iniciado: %s\n",
@@ -284,42 +325,30 @@ void vibracionSetEstado(EstadoSemaforo nuevoEstado) {
 }
 
 void vibracionActualizar() {
-  const PatronVibracion& p = patrones[estadoActual];
-  unsigned long periodoBeat = 60000UL / p.bpm;
-  unsigned long ahora = millis();
+  const PatronVibracion& patron = patrones[estadoActual];
+  const unsigned long ahora = millis();
 
-  switch (fase) {
-    case ESPERANDO_BEAT:
-      if (ahora - tiempoInicioBeat >= periodoBeat) {
-        tiempoInicioBeat = ahora;
-        tiempoInicioFase = ahora;
-        drvEncender(p.intensidad);
-        fase = PULSO_1;
-      }
-      break;
+  if (esperandoSiguientePatron) {
+    if (ahora - tiempoInicioPaso >= patron.pausaEntrePatronesMs) {
+      indicePasoActual = 0;
+      esperandoSiguientePatron = false;
+      vibracionIniciarPasoActual();
+    }
+    return;
+  }
 
-    case PULSO_1:
-      if (ahora - tiempoInicioFase >= p.duracionPulso) {
-        drvApagar();
-        tiempoInicioFase = ahora;
-        fase = p.esDoble ? GAP : ESPERANDO_BEAT;
-      }
-      break;
+  const PasoVibracion& paso = patron.pasos[indicePasoActual];
+  if (ahora - tiempoInicioPaso < paso.duracionMs) {
+    return;
+  }
 
-    case GAP:
-      if (ahora - tiempoInicioFase >= p.gapDoble) {
-        drvEncender(p.intensidad);
-        tiempoInicioFase = ahora;
-        fase = PULSO_2;
-      }
-      break;
-
-    case PULSO_2:
-      if (ahora - tiempoInicioFase >= p.duracionPulso) {
-        drvApagar();
-        fase = ESPERANDO_BEAT;
-      }
-      break;
+  indicePasoActual++;
+  if (indicePasoActual < patron.cantidadPasos) {
+    vibracionIniciarPasoActual();
+  } else {
+    drvApagar();
+    esperandoSiguientePatron = true;
+    tiempoInicioPaso = ahora;
   }
 }
 
@@ -344,6 +373,10 @@ bool interpretarComando(const char* comando, EstadoSemaforo& resultado) {
   }
   if (strcmp(comando, "VERDE") == 0) {
     resultado = VERDE;
+    return true;
+  }
+  if (strcmp(comando, "CAMINANDO") == 0) {
+    resultado = CAMINANDO;
     return true;
   }
   return false;
