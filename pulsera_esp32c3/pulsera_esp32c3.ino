@@ -29,11 +29,22 @@
 #define PIN_SDA 21
 #define PIN_SCL 20
 
+// ---- Medición de batería ----
+#define PIN_BATERIA 5
+#define RESISTENCIA_BATERIA_A_PIN_OHMS 47000.0f
+#define RESISTENCIA_PIN_A_GND_OHMS 10000.0f
+#define VOLTAJE_BATERIA_LLENA 4.20f
+#define VOLTAJE_BATERIA_VACIA 3.00f
+#define CANTIDAD_MUESTRAS_BATERIA 16
+#define INTERVALO_MEDICION_BATERIA 10000UL
+
 // ---- BLE ----
 #define BLE_NOMBRE "Pulsera Cruzar"
 #define BLE_UUID_SERVICIO "12345678-1234-1234-1234-123456789abc"
 #define BLE_UUID_CARACTERISTICA "abcd1234-1234-1234-1234-abcdef123456"
 #define BLE_UUID_CARACTERISTICA_SEMAFORO "abcd1234-1234-1234-1234-abcdef123457"
+#define BLE_UUID_SERVICIO_BATERIA "180F"
+#define BLE_UUID_NIVEL_BATERIA "2A19"
 
 // ---- Tiempos generales ----
 #define TIEMPO_ESPERA_SETUP 1000  // reintento de sensores no encontrados
@@ -56,9 +67,14 @@ Adafruit_BNO055 bno(55, 0x29);  // 55 = id interno ; 0x29 = dirección I2C
 NimBLEServer* servidor = nullptr;
 NimBLECharacteristic* caracteristicaMensaje = nullptr;
 NimBLECharacteristic* caracteristicaSemaforo = nullptr;
+NimBLECharacteristic* caracteristicaBateria = nullptr;
 volatile bool telefonoConectado = false;
 volatile bool notificacionesHabilitadas = false;
 unsigned long ultimoEnvioBLE = 0;
+
+// ---- Batería ----
+uint8_t porcentajeBateriaActual = 0;
+unsigned long ultimaMedicionBateria = 0;
 
 // ---- Vibración ----
 Adafruit_DRV2605 drv;
@@ -72,6 +88,7 @@ enum EstadoSemaforo { SIN_SEMAFORO,
 
 bool interpretarComando(const char* comando, EstadoSemaforo& resultado);
 void vibracionSetEstado(EstadoSemaforo nuevoEstado);
+bool vibracionEstaActiva();
 
 struct PasoVibracion {
   unsigned long duracionMs;
@@ -171,7 +188,86 @@ void sensorLeerMagnetometro(float& x, float& y, float& z) {
 }
 
 // =============================================================
-// 4) BLE
+// 4) BATERÍA
+// =============================================================
+
+uint32_t bateriaLeerMilivoltios() {
+  uint32_t sumaMilivoltiosPin = 0;
+
+  for (int muestra = 0; muestra < CANTIDAD_MUESTRAS_BATERIA; muestra++) {
+    sumaMilivoltiosPin += analogReadMilliVolts(PIN_BATERIA);
+    delayMicroseconds(200);
+  }
+
+  const float promedioMilivoltiosPin =
+    (float)sumaMilivoltiosPin / CANTIDAD_MUESTRAS_BATERIA;
+  const float factorDivisor =
+    (RESISTENCIA_BATERIA_A_PIN_OHMS + RESISTENCIA_PIN_A_GND_OHMS)
+    / RESISTENCIA_PIN_A_GND_OHMS;
+
+  return (uint32_t)roundf(promedioMilivoltiosPin * factorDivisor);
+}
+
+uint8_t bateriaCalcularPorcentaje(uint32_t bateriaMilivoltios) {
+  const float bateriaVoltios = bateriaMilivoltios / 1000.0f;
+  float porcentaje =
+    (bateriaVoltios - VOLTAJE_BATERIA_VACIA)
+    / (VOLTAJE_BATERIA_LLENA - VOLTAJE_BATERIA_VACIA)
+    * 100.0f;
+
+  if (porcentaje < 0.0f) porcentaje = 0.0f;
+  if (porcentaje > 100.0f) porcentaje = 100.0f;
+  return (uint8_t)roundf(porcentaje);
+}
+
+void bateriaPublicarNivel(uint8_t porcentaje) {
+  if (caracteristicaBateria == nullptr) return;
+
+  caracteristicaBateria->setValue(&porcentaje, sizeof(porcentaje));
+  if (telefonoConectado) {
+    caracteristicaBateria->notify();
+  }
+}
+
+void bateriaSetup() {
+  analogReadResolution(12);
+  analogSetPinAttenuation(PIN_BATERIA, ADC_2_5db);
+
+  const uint32_t bateriaMilivoltios = bateriaLeerMilivoltios();
+  porcentajeBateriaActual = bateriaCalcularPorcentaje(bateriaMilivoltios);
+  ultimaMedicionBateria = millis();
+
+  Serial.printf(
+    "Batería iniciada: %.3f V (%u%%)\n",
+    bateriaMilivoltios / 1000.0f,
+    porcentajeBateriaActual);
+}
+
+void bateriaActualizar() {
+  const unsigned long ahora = millis();
+  if (ahora - ultimaMedicionBateria < INTERVALO_MEDICION_BATERIA) return;
+
+  // El motor puede bajar momentáneamente el voltaje medido. Esperamos una
+  // pausa del patrón para obtener una estimación más estable.
+  if (vibracionEstaActiva()) return;
+
+  ultimaMedicionBateria = ahora;
+  const uint32_t bateriaMilivoltios = bateriaLeerMilivoltios();
+  const uint8_t nuevoPorcentaje =
+    bateriaCalcularPorcentaje(bateriaMilivoltios);
+
+  Serial.printf(
+    "Batería: %.3f V (%u%%)\n",
+    bateriaMilivoltios / 1000.0f,
+    nuevoPorcentaje);
+
+  if (nuevoPorcentaje == porcentajeBateriaActual) return;
+  porcentajeBateriaActual = nuevoPorcentaje;
+  bateriaPublicarNivel(porcentajeBateriaActual);
+}
+
+// =============================================================
+// 5) BLE
 // =============================================================
 
 class EventosServidor : public NimBLEServerCallbacks {
@@ -235,6 +331,18 @@ void bleSetup() {
 
   servicio->start();
 
+  // Servicio estándar BLE Battery Service. Battery Level es un byte de 0 a
+  // 100, por lo que otras aplicaciones BLE también pueden interpretarlo.
+  NimBLEService* servicioBateria =
+    servidor->createService(BLE_UUID_SERVICIO_BATERIA);
+  caracteristicaBateria = servicioBateria->createCharacteristic(
+    BLE_UUID_NIVEL_BATERIA,
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  caracteristicaBateria->setValue(
+    &porcentajeBateriaActual,
+    sizeof(porcentajeBateriaActual));
+  servicioBateria->start();
+
   NimBLEAdvertising* anuncio = NimBLEDevice::getAdvertising();
   anuncio->setName(BLE_NOMBRE);
   anuncio->addServiceUUID(servicio->getUUID());
@@ -253,7 +361,7 @@ void bleEnviarMensaje(const char* mensaje) {
 }
 
 // =============================================================
-// 5) VIBRACIÓN (DRV2605L)
+// 6) VIBRACIÓN (DRV2605L)
 // =============================================================
 
 void drvEncender(uint8_t intensidad) {
@@ -262,6 +370,13 @@ void drvEncender(uint8_t intensidad) {
 
 void drvApagar() {
   drv.setRealtimeValue(0);
+}
+
+bool vibracionEstaActiva() {
+  if (esperandoSiguientePatron) return false;
+
+  const PatronVibracion& patron = patrones[estadoActual];
+  return patron.pasos[indicePasoActual].intensidad > 0;
 }
 
 const char* nombreEstadoSemaforo(EstadoSemaforo estado) {
@@ -383,7 +498,7 @@ bool interpretarComando(const char* comando, EstadoSemaforo& resultado) {
 }
 
 // =============================================================
-// 6) SETUP / LOOP
+// 7) SETUP / LOOP
 // =============================================================
 
 void setup() {
@@ -394,6 +509,7 @@ void setup() {
   Wire.begin(PIN_SDA, PIN_SCL);  // un solo bus I2C para BNO055 + DRV2605L
 
   sensorSetup();
+  bateriaSetup();
   vibracionSetup();
   bleSetup();
 
@@ -402,6 +518,7 @@ void setup() {
 
 void loop() {
   vibracionActualizar();  // avanza la máquina de estados de la vibración
+  bateriaActualizar();
 
   if (bleHayConexion() && millis() - ultimoEnvioBLE >= INTERVALO_ENVIO_BLE) {
     ultimoEnvioBLE = millis();
